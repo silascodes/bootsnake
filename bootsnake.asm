@@ -21,7 +21,6 @@ ORG 0x7c00
 %define SCREEN_HEIGHT   25
 %define SCREEN_CELLS    SCREEN_WIDTH * SCREEN_HEIGHT
 %define SCREEN_BYTES    SCREEN_CELLS * 2
-%define BACK_BUF_ADDR   0x4000  ; TODO: is this location safe to use?
 %define FRONT_BUF_SEG   0xb800
 
 ; PRNG related defines
@@ -89,8 +88,7 @@ out 0x40, al
 sti
 
 ; Initialise video mode (use VGA 40x20 16 colour mode)
-mov ah, 0x00
-mov al, 0x00
+xor ax, ax
 int 0x10
 
 ; Disable VGA cursor
@@ -98,6 +96,10 @@ mov ah, 0x01
 mov ch, 0x20    ; Invisible cursor mode
 mov cl, 0x00    ; Don't care, it's invisible
 int 0x10
+
+; Set GS as frame buffer Segment
+mov ax, FRONT_BUF_SEG
+mov gs, ax
 
 ; Draw the stuff that never changes
 call DrawFrame
@@ -155,19 +157,7 @@ _onKeyboardSkip:
 ; -----------------------------------------------------------------------------
 
 GameTick:
-    pusha
-    mov al, [attr]
-    sub al, 0x07
-    jz _changeAttr
-    mov byte [attr], 0x07
-    jmp _update
-_changeAttr:
-    mov byte [attr], 0x08
-_update:
     call SpawnFood
-
-    call SwapBuffers
-    popa
     ret
 
 
@@ -232,23 +222,12 @@ _spawnFoodDone:
 ; -----------------------------------------------------------------------------
 
 IsTileFree:
-    push dx
-    push cx
-
+    xor ax, ax
     call CalculateScreenOffset
-
-    mov si, BACK_BUF_ADDR
-    add si, dx
-    cmp word [si], 0x0000
-    je _isTileFreeYes
-    mov ax, 0
-    jmp _isTileFreeDone
-_isTileFreeYes:
-    mov ax, 1
+    cmp word [gs:di], 0x0000
+    jne _isTileFreeDone
+    inc ax
 _isTileFreeDone:
-
-    pop cx
-    pop dx
     ret
 
 
@@ -263,7 +242,7 @@ _isTileFreeDone:
 ; -----------------------------------------------------------------------------
 
 Random:
-    pusha
+    push bx
 
     mov ax, [randomX]
     mul ax
@@ -279,7 +258,7 @@ Random:
 
     or ax, bx
 
-    popa
+    pop bx
     ret
 
 
@@ -342,18 +321,8 @@ DrawFrame:
 ; -----------------------------------------------------------------------------
 
 DrawPoint:
-    pusha
-
     call CalculateScreenOffset
-
-    ; Do the actual drawing of the point
-    mov di, BACK_BUF_ADDR
-    add di, dx
-    mov [di], al
-    inc di
-    mov [di], ah
-
-    popa
+    mov word [gs:di], ax
     ret
 
 
@@ -403,15 +372,11 @@ DrawHorizontalLine:
 
     ; Get starting address in back buffer
     call CalculateScreenOffset
-    mov di, BACK_BUF_ADDR
-    add di, dx
 
     ; Do actual line drawing
 _drawHorizontalLineLoop:
-    mov byte [di], al
-    inc di
-    mov byte [di], ah
-    inc di
+    mov word [gs:di], ax
+    add di, 2
     dec cx
     cmp cx, 0
     jge _drawHorizontalLineLoop
@@ -436,13 +401,10 @@ DrawVerticalLine:
 
     ; Get starting address in back buffer
     call CalculateScreenOffset
-    mov di, BACK_BUF_ADDR
-    add di, dx
 
     ; Do actual line drawing
 _drawVerticalLineLoop:
-    mov byte [di], al
-    mov byte [di + 1], ah
+    mov word [gs:di], ax
     add di, (SCREEN_WIDTH * 2)
     dec cx
     cmp cx, 0
@@ -460,21 +422,21 @@ _drawVerticalLineLoop:
 ;   bl      x coordinate
 ;   bh      y coordinate
 ; Returns:
-;   dx      offset into frame buffer
+;   di      offset into frame buffer
 ; -----------------------------------------------------------------------------
 
 CalculateScreenOffset:
     ; Clear offset
-    xor dx, dx
+    xor di, di
     
     ; If y coordinate is greater than 0, advance offset down screen
     cmp bh, 0
     je _drawPointSkipYAdvance
-    mov dx, (SCREEN_WIDTH * 2)
+    mov di, (SCREEN_WIDTH * 2)
     push ax
-    mov ax, dx
+    mov ax, di
     mul bh
-    mov dx, ax
+    mov di, ax
     pop ax
 _drawPointSkipYAdvance:
 
@@ -483,31 +445,10 @@ _drawPointSkipYAdvance:
     je _drawPointSkipXAdvance
     push bx
     xor bh, bh
-    add dx, bx
-    add dx, bx
+    add di, bx
+    add di, bx
     pop bx
 _drawPointSkipXAdvance:
-    ret
-
-
-
-; -----------------------------------------------------------------------------
-; SwapBuffers
-; Copy the contents of the screens back buffer to its front buffer
-; -----------------------------------------------------------------------------
-
-SwapBuffers:
-    pusha
-    push es
-    mov ax, FRONT_BUF_SEG
-    mov es, ax
-    mov si, BACK_BUF_ADDR
-    xor di, di
-    mov cx, SCREEN_BYTES
-    cld
-    rep movsb
-    pop es
-    popa
     ret
 
 
@@ -524,8 +465,6 @@ randomX:        db 0
 randomW:        db 0
 score:          db 0
 currentFood:    db 0
-char:           db 0x41
-attr:           db 0x07
 
 
 
